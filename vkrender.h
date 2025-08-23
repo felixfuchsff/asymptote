@@ -438,7 +438,6 @@ private:
   vk::UniqueSwapchainKHR swapChain;
   vk::UniqueCommandBuffer exportCommandBuffer;
   vk::UniqueFence exportFence;
-  std::vector<vk::Fence> imagesInFlight;
 
   vk::Format backbufferImageFormat=vk::Format::eB8G8R8A8Unorm;
   vk::Extent2D backbufferExtent;

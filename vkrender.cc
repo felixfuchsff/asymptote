@@ -1439,8 +1439,6 @@ void AsyVkRender::createSwapChain()
   backbufferImageFormat = format.format;
   backbufferExtent = extent;
 
-  imagesInFlight.assign(maxFramesInFlight, VK_NULL_HANDLE);
-
   for(auto & image: backbufferImages) {
     transitionImageLayout(vk::ImageLayout::eUndefined, vk::ImageLayout::ePresentSrcKHR, image);
   }
@@ -4251,14 +4249,6 @@ void AsyVkRender::drawFrame()
     else if (result != vk::Result::eSuccess && result != vk::Result::eSuboptimalKHR)
       runtimeError("failed to acquire next swapchain image");
   }
-
-  // Wait for the image we're going to render into to be free
-  if (imagesInFlight[currentFrame]) {
-    vkutils::checkVkResult(device->waitForFences(1, &imagesInFlight[currentFrame], VK_TRUE,
-                                                 std::numeric_limits<uint64_t>::max()));
-  }
-// This frame's fence will now be the one guarding this image
-  imagesInFlight[currentFrame] = *frameObject.inFlightFence;
 
   frameObject.commandBuffer->reset(vk::CommandBufferResetFlagBits());
 

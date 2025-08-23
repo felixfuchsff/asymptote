@@ -786,6 +786,13 @@ void AsyVkRender::recreateSwapChain()
 
   createSwapChain();
 
+// Match semaphore array to the new backbuffer image count
+  renderFinishedSemaphore.clear();
+  renderFinishedSemaphore.resize(backbufferImages.size());
+  for (auto& s : renderFinishedSemaphore) {
+    s = device->createSemaphoreUnique(vk::SemaphoreCreateInfo());
+  }
+
   if (fxaa)
   {
     setupPostProcessingComputeParameters();
@@ -1429,7 +1436,7 @@ void AsyVkRender::createSwapChain()
   backbufferImageFormat = format.format;
   backbufferExtent = extent;
 
-  imagesInFlight.assign(backbufferImages.size(), VK_NULL_HANDLE);
+  imagesInFlight.assign(maxFramesInFlight, VK_NULL_HANDLE);
 
   for(auto & image: backbufferImages) {
     transitionImageLayout(vk::ImageLayout::eUndefined, vk::ImageLayout::ePresentSrcKHR, image);
@@ -3129,7 +3136,7 @@ void AsyVkRender::createGraphicsRenderPass()
                   vk::PipelineStageFlagBits::eColorAttachmentOutput,
                   vk::PipelineStageFlagBits::eColorAttachmentOutput,
                   vk::AccessFlagBits::eNone,
-                  vk::AccessFlagBits::eNone
+                  vk::AccessFlagBits::eColorAttachmentWrite
           ),
           vk::SubpassDependency2(
                   0,
@@ -4213,20 +4220,28 @@ void AsyVkRender::drawFrame()
     recreatePipeline = false;
   }
 
-  vkutils::checkVkResult(device->waitForFences(
-    1, &*frameObject.inFlightFence, VK_TRUE, std::numeric_limits<uint64_t>::max()
-  ));
-
   uint32_t imageIndex=0; // index of the current swap chain image to render to
 
-  // Get the image index from the swapchain if not viewing.
+  // Get the image index from the swapchain if viewing.
   if (View) {
+    int iconified = glfwGetWindowAttrib(window, GLFW_ICONIFIED);
+    int visible   = glfwGetWindowAttrib(window, GLFW_VISIBLE);
+    if(iconified || !visible ||
+       backbufferExtent.width == 0 || backbufferExtent.height == 0)
+      return;
+
     auto const result = device->acquireNextImageKHR(*swapChain, std::numeric_limits<uint64_t>::max(),
                                                         *frameObject.imageAvailableSemaphore, nullptr,
                                                         &imageIndex);
-    if (result == vk::Result::eErrorOutOfDateKHR
-        || result == vk::Result::eSuboptimalKHR || framebufferResized) {
+    if (result == vk::Result::eErrorOutOfDateKHR ||
+        result == vk::Result::eSuboptimalKHR ||
+        result == vk::Result::eErrorSurfaceLostKHR ||
+        framebufferResized) {
       framebufferResized = false;
+      if(result == vk::Result::eErrorSurfaceLostKHR) {
+        cerr << "Surface lost!" << endl;
+        createSurface();
+      }
       recreateSwapChain();
       return;
     }
@@ -4235,16 +4250,13 @@ void AsyVkRender::drawFrame()
   }
 
   // Wait for the image we're going to render into to be free
-  if (imagesInFlight[imageIndex]) {
-    vkutils::checkVkResult(device->waitForFences(1, &imagesInFlight[imageIndex], VK_TRUE,
+  if (imagesInFlight[currentFrame]) {
+    vkutils::checkVkResult(device->waitForFences(1, &imagesInFlight[currentFrame], VK_TRUE,
                                                  std::numeric_limits<uint64_t>::max()));
   }
 // This frame's fence will now be the one guarding this image
-  imagesInFlight[imageIndex] = *frameObject.inFlightFence;
+  imagesInFlight[currentFrame] = *frameObject.inFlightFence;
 
-  vkutils::checkVkResult(device->resetFences(
-    1, &*frameObject.inFlightFence
-  ));
   frameObject.commandBuffer->reset(vk::CommandBufferResetFlagBits());
 
   updateUniformBuffer(currentFrame);
@@ -4344,6 +4356,14 @@ void AsyVkRender::drawFrame()
     VEC_VIEW(signalSemaphores)
   );
 
+  vkutils::checkVkResult(device->waitForFences(
+    1, &*frameObject.inFlightFence, VK_TRUE, std::numeric_limits<uint64_t>::max()
+  ));
+
+  vkutils::checkVkResult(device->resetFences(
+    1, &*frameObject.inFlightFence
+  ));
+
   if (renderQueue.submit(SINGLETON_VIEW(submitInfo), *frameObject.inFlightFence) != vk::Result::eSuccess)
     runtimeError("failed to submit draw command buffer");
 
@@ -4362,10 +4382,15 @@ void AsyVkRender::drawFrame()
       auto presentInfo = vk::PresentInfoKHR(VEC_VIEW(signalSemaphores), 1, &*swapChain, &imageIndex);
       auto const result = presentQueue.presentKHR(presentInfo);
 
-      if (result == vk::Result::eErrorOutOfDateKHR
-          || result == vk::Result::eSuboptimalKHR
-          || framebufferResized) {
+    if (result == vk::Result::eErrorOutOfDateKHR ||
+        result == vk::Result::eSuboptimalKHR ||
+        result == vk::Result::eErrorSurfaceLostKHR ||
+        framebufferResized) {
         framebufferResized = false;
+        if(result == vk::Result::eErrorSurfaceLostKHR) {
+          cerr << "Surface lost!" << endl;
+          createSurface();
+        }
         recreateSwapChain();
         return;
        }

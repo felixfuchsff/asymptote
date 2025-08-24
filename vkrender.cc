@@ -2674,8 +2674,8 @@ void AsyVkRender::createBuffers()
     frameObj.uboMappedMemory = make_unique<vma::cxx::MemoryMapperLock>(frameObj.uboBf);
   }
 
-  createMaterialAndLightBuffers();
-  createDependentBuffers();
+//  createMaterialAndLightBuffers();
+//  createDependentBuffers();
 }
 
 
@@ -2777,8 +2777,10 @@ void AsyVkRender::createImmediateRenderTargets()
 
 void AsyVkRender::createDependentBuffers()
 {
-  render(); // Determine whether the scene is opaque.
-  redisplay=true;
+//  redraw=true;
+//  render(); // Determine whether the scene is opaque.
+//  redisplay=true;
+  cout << "createDependent" << endl;
 
   pixels=Opaque ? 1 : (backbufferExtent.width+1)*(backbufferExtent.height+1);
 
@@ -4447,7 +4449,6 @@ void AsyVkRender::clearBuffers()
 
 void AsyVkRender::render()
 {
-
 #ifdef HAVE_PTHREAD
   static bool first=true;
   if(vkthread && first) {
@@ -4461,6 +4462,7 @@ void AsyVkRender::render()
 #endif
 
   if(redraw) {
+    cout << "render" << endl;
     clearData();
 
     if(remesh)

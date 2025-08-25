@@ -301,6 +301,7 @@ void AsyVkRender::updateHandler(int) {
   vk->remesh=true;
   vk->framebufferResized=true;
   vk->waitEvent=false;
+  vk->recreatePipeline=true;
 }
 
 std::string AsyVkRender::getAction(int button, int mods)
@@ -1442,6 +1443,10 @@ void AsyVkRender::createSwapChain()
   for(auto & image: backbufferImages) {
     transitionImageLayout(vk::ImageLayout::eUndefined, vk::ImageLayout::ePresentSrcKHR, image);
   }
+
+  imagesInFlight.assign(backbufferImages.size(), VK_NULL_HANDLE);
+
+
 }
 
 void AsyVkRender::createOffscreenBuffers() {
@@ -2779,6 +2784,7 @@ void AsyVkRender::createDependentBuffers()
 {
   render(); // Determine whether the scene is opaque.
   redisplay=true;
+  cout << "createDependent" << endl;
 
   pixels=Opaque ? 1 : (backbufferExtent.width+1)*(backbufferExtent.height+1);
 
@@ -3071,6 +3077,10 @@ void AsyVkRender::createGraphicsRenderPass()
     (View ? vk::ImageLayout::ePresentSrcKHR :
      vk::ImageLayout::eColorAttachmentOptimal);
 
+  // Choose the correct *initial* layout for the swapchain image
+  vk::ImageLayout colorResolveInitialLayout =
+    (View && !fxaa) ? vk::ImageLayout::ePresentSrcKHR
+                    : vk::ImageLayout::eUndefined;
 
   auto colorResolveAttachment = vk::AttachmentDescription2(
     vk::AttachmentDescriptionFlags(),
@@ -3080,8 +3090,8 @@ void AsyVkRender::createGraphicsRenderPass()
     vk::AttachmentStoreOp::eStore,
     vk::AttachmentLoadOp::eDontCare,
     vk::AttachmentStoreOp::eDontCare,
-    vk::ImageLayout::eUndefined,
-          colorAttachmentFinalLayout
+    colorResolveInitialLayout,
+    colorAttachmentFinalLayout
   );
   auto depthAttachment = vk::AttachmentDescription2(
     vk::AttachmentDescriptionFlags(),
@@ -3131,6 +3141,7 @@ void AsyVkRender::createGraphicsRenderPass()
   };
 
   std::vector const dependencies{
+    // External -> Subpass 0
           vk::SubpassDependency2(
                   VK_SUBPASS_EXTERNAL,
                   0,
@@ -3139,13 +3150,24 @@ void AsyVkRender::createGraphicsRenderPass()
                   vk::AccessFlagBits::eNone,
                   vk::AccessFlagBits::eColorAttachmentWrite
           ),
+          // Subpass 0 -> Subpass 1  (opaque -> transparent)
           vk::SubpassDependency2(
-                  0,
+            0, 1,
+            vk::PipelineStageFlagBits::eColorAttachmentOutput,
+            vk::PipelineStageFlagBits::eColorAttachmentOutput,
+            vk::AccessFlagBits::eColorAttachmentWrite, // writes from 0
+            vk::AccessFlagBits::eColorAttachmentRead |
+            vk::AccessFlagBits::eColorAttachmentWrite // read+blend in 1
+            ),
+          // Subpass 1 -> Subpass 2  (transparent -> blend)
+          vk::SubpassDependency2(
+                  1,
                   2,
                   vk::PipelineStageFlagBits::eColorAttachmentOutput,
                   vk::PipelineStageFlagBits::eColorAttachmentOutput,
-                  vk::AccessFlagBits::eNone,
-                  vk::AccessFlagBits::eNone
+                  vk::AccessFlagBits::eColorAttachmentWrite, // writes from 1
+                  vk::AccessFlagBits::eColorAttachmentRead |
+                  vk::AccessFlagBits::eColorAttachmentWrite // read+blend in 2
           )
   };
 
@@ -4212,7 +4234,19 @@ void AsyVkRender::copyToSwapchainImg(vk::CommandBuffer& cmdBuffer, uint32_t cons
 
 void AsyVkRender::drawFrame()
 {
+  if(framebufferResized) {
+    framebufferResized=false;
+    recreateSwapChain();
+    return;
+  }
+
   auto& frameObject = frameObjects[currentFrame];
+
+   // ---- NEW: wait for this frame's previous work to finish BEFORE reusing its resources ----
+  vkutils::checkVkResult(device->waitForFences(
+      1, &*frameObject.inFlightFence, VK_TRUE, std::numeric_limits<uint64_t>::max()));
+  vkutils::checkVkResult(device->resetFences(1, &*frameObject.inFlightFence));
+  // -----------------------------------------------------------------------------------------
 
   // check to see if any pipeline state changed.
   if (recreatePipeline)
@@ -4248,6 +4282,14 @@ void AsyVkRender::drawFrame()
     }
     else if (result != vk::Result::eSuccess && result != vk::Result::eSuboptimalKHR)
       runtimeError("failed to acquire next swapchain image");
+  }
+
+  // If a previous frame is still using this image, wait for it.
+  if (imagesInFlight[imageIndex] != VK_NULL_HANDLE
+    && imagesInFlight[imageIndex] != *frameObject.inFlightFence) {
+    vkutils::checkVkResult(device->waitForFences(
+                             1, &imagesInFlight[imageIndex], VK_TRUE,
+                             std::numeric_limits<uint64_t>::max()));
   }
 
   frameObject.commandBuffer->reset(vk::CommandBufferResetFlagBits());
@@ -4324,7 +4366,7 @@ void AsyVkRender::drawFrame()
   }
 
   endFrameCommands();
-  // recording done, not go to submit stage
+  // recording done, now go to submit stage
 
   std::vector<vk::Semaphore> waitSemaphores {}, signalSemaphores {};
 
@@ -4349,6 +4391,7 @@ void AsyVkRender::drawFrame()
     VEC_VIEW(signalSemaphores)
   );
 
+  /*
   vkutils::checkVkResult(device->waitForFences(
     1, &*frameObject.inFlightFence, VK_TRUE, std::numeric_limits<uint64_t>::max()
   ));
@@ -4356,6 +4399,9 @@ void AsyVkRender::drawFrame()
   vkutils::checkVkResult(device->resetFences(
     1, &*frameObject.inFlightFence
   ));
+  */
+
+  imagesInFlight[imageIndex] = *frameObject.inFlightFence;
 
   if (renderQueue.submit(SINGLETON_VIEW(submitInfo), *frameObject.inFlightFence) != vk::Result::eSuccess)
     runtimeError("failed to submit draw command buffer");
@@ -4461,6 +4507,7 @@ void AsyVkRender::render()
 #endif
 
   if(redraw) {
+    cout << "render" << endl;
     clearData();
 
     if(remesh)

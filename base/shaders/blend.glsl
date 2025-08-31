@@ -146,7 +146,7 @@ void main()
     if(OpaqueDepth != 0.0)
       opaqueDepth[pixel]=0.0;
   } else {
-    atomicMax(maxDepth,size);
+    if(size > maxDepth) maxDepth=size;
     maxSize=maxDepth;
     for(uint i=k+1u; i < size; i++) {
       vec4 temp=fragment[listIndex+i];

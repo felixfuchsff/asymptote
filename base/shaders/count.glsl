@@ -22,6 +22,6 @@ layout(push_constant) uniform PushConstants
 
 void main()
 {
-  atomicAdd(index[uint(gl_FragCoord.y)*push.constants[1]+uint(gl_FragCoord.x)],1u);
+  index[uint(gl_FragCoord.y)*push.constants[1]+uint(gl_FragCoord.x)]++;
   discard;
 }

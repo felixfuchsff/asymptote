@@ -303,7 +303,7 @@ void main() {
   uint pixel=uint(gl_FragCoord.y)*push.constants[1]+uint(gl_FragCoord.x);
 #if defined(TRANSPARENT) || (!defined(HAVE_INTERLOCK) && !defined(OPAQUE))
   uint element=INDEX(pixel);
-  uint listIndex=atomicAdd(offset[element],-1u)-1u;
+  uint listIndex=offset[element]--;
   fragment[listIndex]=linearColor;
   depth[listIndex]=gl_FragCoord.z;
 #ifndef WIREFRAME
